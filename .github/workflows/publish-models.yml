@@ -1,0 +1,53 @@
+# Puts the speech models ZCuts can download on this repo's Releases.
+# Run it from the Actions tab ("Publish models" > Run workflow). It fetches
+# the exact pinned files from Hugging Face, checks every SHA-256 against
+# checksums/, makes one release per model (tag = whisper-<size>), then
+# downloads each file back from the release and checks it again.
+# Running it again replaces the files of an existing release.
+name: Publish models
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 1
+      matrix:
+        size: [tiny, medium, large-v3-turbo]
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PACK: whisper-${{ matrix.size }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch the pinned files
+        run: |
+          read repo rev < checksums/$PACK.source
+          mkdir -p out/$PACK
+          while read sum name; do
+            curl -fL --retry 5 -o "out/$PACK/$name" \
+              "https://huggingface.co/$repo/resolve/$rev/$name"
+          done < checksums/$PACK.sha256
+          cp licenses/LICENSE-whisper.txt out/$PACK/LICENSE.txt
+      - name: Check every SHA-256
+        run: cd out/$PACK && sha256sum -c ../../checksums/$PACK.sha256
+      - name: Make or update the release
+        run: |
+          read repo rev < checksums/$PACK.source
+          notes="Whisper speech model ($PACK) for ZCuts, converted for faster-whisper (CTranslate2).
+          Source: https://huggingface.co/$repo at revision $rev. Licence: MIT (LICENSE.txt).
+          SHA-256 of each file: checksums/$PACK.sha256 in this repo."
+          if gh release view "$PACK" >/dev/null 2>&1; then
+            gh release upload "$PACK" out/$PACK/* --clobber
+          else
+            gh release create "$PACK" out/$PACK/* --title "$PACK" --notes "$notes"
+          fi
+      - name: Download back and check
+        run: |
+          mkdir back && cd back
+          while read sum name; do
+            curl -fL --retry 5 -o "$name" \
+              "https://github.com/${{ github.repository }}/releases/download/$PACK/$name"
+          done < ../checksums/$PACK.sha256
+          sha256sum -c ../checksums/$PACK.sha256
